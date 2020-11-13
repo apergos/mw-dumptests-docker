@@ -8,12 +8,13 @@ Usage: $0 --wiki <dbname> [--revinfo|--batches|--private]
   --batches      do the primary and secondary batch worker version of the test
   --private      do the output into private directory version of the test
   --compareonly  just compare existing output w/o producing new files
+  --verbose      print commands before we run them
 EOF
 	exit 1
 }
 
 set_defaults() {
-    vars="COMPAREONLY DOREVINFO DOBATCHES DOPRIVATE WIKI"
+    vars="COMPAREONLY DOREVINFO DOBATCHES DOPRIVATE VERBOSE WIKI"
     for varname in $vars; do
         declare $varname="";
     done
@@ -32,6 +33,9 @@ process_opts () {
 	    shift
 	elif [ $1 == "--compare" ]; then
 	    COMPAREONLY="true"
+	    shift
+	elif [ $1 == "--verbose" ]; then
+	    VERBOSE="true"
 	    shift
 	elif [ $1 == "--wiki" ]; then
 	    WIKI="$2"
@@ -171,17 +175,30 @@ do_test() {
     fi
     if [ -z "$DOBATCHES" ]; then
 	if [ -z "$DOREVINFO" ]; then
-		python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" "$WIKI"
+	    if [ -n "$VERBOSE" ]; then
+		echo python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" "$WIKI"
+	    fi
+	    python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" "$WIKI"
 	else
+	    if [ -n "$VERBOSE" ]; then
+		python ./worker.py --configfile confs/wikidump.conf.current-revinfo:bigwikis --date "$DATE" "$WIKI"
+	    fi
 	    python ./worker.py --configfile confs/wikidump.conf.current-revinfo:bigwikis --date "$DATE" "$WIKI"
 	fi
     else
 	# run everything that doesn't involve the bz2 pages-meta-history
+	if [ -n "$VERBOSE" ]; then
+	    echo python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --skipjobs metahistorybz2dump,metahistorybz2dumprecombine,metahistory7zdump,metahistory7zdumprecombine "$WIKI"
+	fi
 	python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --skipjobs metahistorybz2dump,metahistorybz2dumprecombine,metahistory7zdump,metahistory7zdumprecombine "$WIKI"
 
 	echo ">>>>>>>>>>>>>>>>>>>>>>>>>  STARTING PRIMARY"
 	wait_pids=()
 	# run the pmh bz2 as primary 
+	if [ -n "$VERBOSE" ]; then
+	    echo '(' python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --job metahistorybz2dump --exclusive "$WIKI" ')'
+	fi
+
 	( python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --job metahistorybz2dump --exclusive "$WIKI" ) &
 	wait_pids+=($!)
 
@@ -199,6 +216,10 @@ do_test() {
 
 	echo ">>>>>>>>>>>>>>>>>>>>>>>>>  BATCHFILE EXISTS, RUNNING SECONDARY WORKER"
 	# run the pmh bz2 also as secondary with no locks
+	if [ -n "$VERBOSE" ]; then
+	    echo '(' python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --job metahistorybz2dump --batches "$WIKI" ')'
+	fi
+
 	( python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --job metahistorybz2dump --batches "$WIKI" ) &
 	ps axuww | grep worker.py
 	wait_pids+=($!)
@@ -213,11 +234,17 @@ do_test() {
 	done
 
 	# run the rest (7z, recombines)
+	if [ -n "$VERBOSE" ]; then
+	    python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --skipdone "$WIKI"
+	fi
 	python ./worker.py --configfile confs/wikidump.conf.current:bigwikis --date "$DATE" --skipdone "$WIKI"
     fi
 }
 
 do_compare() {
+    if [ -n "$VERBOSE" ]; then
+	echo "doing compare of old and new output"
+    fi
     # check that the regenerated file(s) have the same name and content as the old ones
     FILES=$( ls ${NEWDIR}/${WIKI}*gz )
     check_files zcat
